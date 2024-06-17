@@ -1,0 +1,7 @@
+[submodule "lib/ion-boring-vault"]
+	path = lib/ion-boring-vault
+	url = https://github.com/Ion-Protocol/ion-boring-vault
+	branch = feat/ion-deployments
+[submodule "lib/solmate"]
+	path = lib/solmate
+	url = https://github.com/transmissions11/solmate.git
