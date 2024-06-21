@@ -136,4 +136,5 @@ contract MyOFTTest is TestHelperOz5 {
         assertEq(composer.executor(), address(this));
         assertEq(composer.extraData(), composerMsg_); // default to setting the extraData to the message as well to test
     }
+
 }

@@ -24,10 +24,10 @@ contract BoringVaultCrossChainDepositor {
     error InvalidTeller();
     error AssetNotSupported();
 
-    uint32 immutable dstEid;
-    BoringVault immutable boringVault;
-    TellerWithMultiAssetSupport immutable teller;
-    OFTAdapter immutable oftAdapter;
+    uint32 immutable public dstEid;
+    BoringVault immutable public boringVault;
+    TellerWithMultiAssetSupport immutable public teller;
+    OFTAdapter immutable public oftAdapter;
 
     /**
      * @dev The boring vault token must be the `innerToken` of the OFTAdapter.

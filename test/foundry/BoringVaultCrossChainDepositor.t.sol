@@ -24,14 +24,14 @@ import {ERC20Mock} from "../mocks/ERC20Mock.sol";
 import {Test, stdStorage, StdStorage, stdError, console} from "forge-std/Test.sol";
 import { console2 } from "forge-std/console2.sol";
 
+using stdStorage for StdStorage;
+using OptionsBuilder for bytes;
+
 interface ISendUln302 {
     function getConfig(uint32 _eid, address _oapp, uint32 _configType) external view returns (bytes memory);
 }
 
-contract BoringVaultAdapterTest is TestHelperOz5 {
-    using stdStorage for StdStorage;
-    using OptionsBuilder for bytes;
-
+contract BoringVaultSharedSetup is TestHelperOz5 {
     ERC20 WETH = ERC20(address(new ERC20Mock("Wrapped Ether", "WETH"))); // ERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
     ERC20 WSTETH = ERC20(address(new ERC20Mock("Wrapped stETH", "wstETH"))); // ERC20(0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0);
 
@@ -61,7 +61,7 @@ contract BoringVaultAdapterTest is TestHelperOz5 {
     ILayerZeroEndpointV2 mainnetEndpoint; // = ILayerZeroEndpointV2(0x1a44076050125825900e736c501f859c50fE728c);
     ILayerZeroEndpointV2 rollupEndpoint;
 
-    OFT oftL2;
+    BoringVaultL2OFT oftL2;
 
     uint8 l1Eid;
     uint8 l2Eid;
@@ -70,7 +70,9 @@ contract BoringVaultAdapterTest is TestHelperOz5 {
 
     address immutable BRIDGE_RECIPIENT = makeAddr("BRIDGE RECIPIENT");
 
-    function setUp() public override {
+    uint256 INITIAL_EXCHANGE_RATE = 1e18;
+
+    function setUp() public override virtual {
         // --- Boring Vault Setup ---
 
         boringVault = new BoringVault(
@@ -165,6 +167,10 @@ contract BoringVaultAdapterTest is TestHelperOz5 {
 
         oftL2 = new BoringVaultL2OFT (
             WETH,
+            INITIAL_EXCHANGE_RATE,
+            1e4,
+            1e4,
+            3600,
             "Ion Boring Vault",
             "IBV",
             address(rollupEndpoint),
@@ -190,6 +196,9 @@ contract BoringVaultAdapterTest is TestHelperOz5 {
         
         crossChainDepositorL1.maxApprove(WETH);
     }
+}
+
+contract BoringVaultAdapterTest is BoringVaultSharedSetup {
 
     function test_MaxApprove() public {
         assertEq(WETH.allowance(address(crossChainDepositorL1), address(boringVault)), 0, "no allowance"); 
@@ -218,8 +227,7 @@ contract BoringVaultAdapterTest is TestHelperOz5 {
 
         uint128 gasLimit = 200000;
         bytes memory options = OptionsBuilder.newOptions().addExecutorLzReceiveOption(gasLimit, 0);
-        console2.log('options');
-        console2.logBytes(options);
+        
         // Just for simulating costs
         SendParam memory sendParam = SendParam({
             dstEid: 2,
@@ -290,18 +298,18 @@ contract BoringVaultAdapterTest is TestHelperOz5 {
     }
 
 
-    // struct UlnConfig {
-    //     uint64 confirmations;
-    //     // we store the length of required DVNs and optional DVNs instead of using DVN.length directly to save gas
-    //     uint8 requiredDVNCount; // 0 indicate DEFAULT, NIL_DVN_COUNT indicate NONE (to override the value of default)
-    //     uint8 optionalDVNCount; // 0 indicate DEFAULT, NIL_DVN_COUNT indicate NONE (to override the value of default)
-    //     uint8 optionalDVNThreshold; // (0, optionalDVNCount]
-    //     address[] requiredDVNs; // no duplicates. sorted an an ascending order. allowed overlap with optionalDVNs
-    //     address[] optionalDVNs; // no duplicates. sorted an an ascending order. allowed overlap with requiredDVNs
-    // }
     /**
      * Change the Config Type ULN for the block confirmations required. 
      * Change the Config Type Executor 
+     * struct UlnConfig {
+     *     uint64 confirmations;
+     *     // we store the length of required DVNs and optional DVNs instead of using DVN.length directly to save gas
+     *     uint8 requiredDVNCount; // 0 indicate DEFAULT, NIL_DVN_COUNT indicate NONE (to override the value of default)
+     *     uint8 optionalDVNCount; // 0 indicate DEFAULT, NIL_DVN_COUNT indicate NONE (to override the value of default)
+     *     uint8 optionalDVNThreshold; // (0, optionalDVNCount]
+     *     address[] requiredDVNs; // no duplicates. sorted an an ascending order. allowed overlap with optionalDVNs
+     *     address[] optionalDVNs; // no duplicates. sorted an an ascending order. allowed overlap with requiredDVNs
+     * }
      */
     function test_LayerZeroConfigs() public {
         uint8 CONFIG_TYPE_EXECUTOR = 1;
@@ -328,4 +336,158 @@ contract BoringVaultAdapterTest is TestHelperOz5 {
     function test_Revert_DepositAndBridge_BelowMinimumMint() public {
 
     }
+
+    function test_BoringVaultL2OFT_UpdateDelay() public {
+
+    }
+}
+
+contract BoringVaultL2OFTTest is BoringVaultSharedSetup {
+    function setUp() public override {
+        super.setUp();
+        vm.warp(block.timestamp + 3600);   
+    }
+
+    /** Accountant State */
+
+    function test_UpdateDelay() public {
+        uint32 delay = 3600;
+        oftL2.updateDelay(delay); 
+        (,,,, uint32 actualDelay) = oftL2.accountantState();
+        assertEq(actualDelay, delay, "delay");
+    }   
+
+    function test_Revert_UpdateDelay() public {
+        uint32 delay = 0;
+        vm.expectRevert(BoringVaultL2OFT.InvalidMinimumUpdateDelay.selector);
+        oftL2.updateDelay(delay);
+    }
+
+    function test_UpdateUpper() public {
+        uint16 changeUpper = 1.02e4; // should be 2%
+        oftL2.updateUpper(changeUpper);
+    } 
+    
+    function test_Revert_UpdateUpper() public {
+        uint16 changeUpper = 0.99e4;
+        vm.expectRevert(BoringVaultL2OFT.InvalidAllowedExchangeRateChangeUpper.selector);
+        oftL2.updateUpper(changeUpper);
+    }
+    
+    function test_UpdateLower() public {
+        uint16 changeLower = 0.98e4;
+        oftL2.updateLower(changeLower);
+    }
+
+    function test_Revert_UpdateLower() public {
+        uint16 changeLower = 1.1e4; 
+        vm.expectRevert(BoringVaultL2OFT.InvalidAllowedExchangeRateChangeLower.selector);
+        oftL2.updateLower(changeLower);
+    }
+
+    function test_UpdateExchangeRate_WithinUpperBound() public {
+        oftL2.updateUpper(1.02e4); // 2%
+        oftL2.updateExchangeRate(1.02e18); 
+        assertEq(oftL2.getRate(), 1.02e18, "exchange rate");
+    }
+
+    function test_Revert_UpdateExchangeRate_PastUpperBound() public {
+        oftL2.updateUpper(1.02e4);
+        vm.expectRevert(BoringVaultL2OFT.InvalidNewExchangeRate.selector);
+        oftL2.updateExchangeRate(1.021e18);
+    }
+
+    function test_UpdateExchangeRate_WithinLowerBound() public {
+        oftL2.updateLower(0.98e4);
+        oftL2.updateExchangeRate(0.99e18);
+        assertEq(oftL2.getRate(), 0.99e18, "exchange rate");
+    }
+
+    function test_Revert_UpdateExchangeRate_PastLowerBound() public {
+        oftL2.updateLower(0.98e4);
+        vm.expectRevert(BoringVaultL2OFT.InvalidNewExchangeRate.selector);
+        oftL2.updateExchangeRate(0.97e18);
+    }
+
+    function test_UpdateExchangeRate_WithinMinimumDelay() public {
+        oftL2.updateUpper(1.02e4);
+        oftL2.updateExchangeRate(1.01e18);
+
+        vm.warp(block.timestamp + 3600);
+        oftL2.updateExchangeRate(1.02e18);
+        assertEq(oftL2.getRate(), 1.02e18, "exchange rate");
+    }
+
+    function test_Revert_UpdateExchangeRate_WithinMinimumDelay() public {
+        oftL2.updateUpper(1.02e4);
+        oftL2.updateExchangeRate(1.01e18);
+
+        vm.expectRevert(BoringVaultL2OFT.InvalidNewExchangeRate.selector);
+        oftL2.updateExchangeRate(1.015e18);
+    }
+
+    /** Access Control */
+
+    function test_UpdateExchangeRateRole() public {
+        address updateRole = makeAddr("UPDATE_EXCHANGE_RATE_ROLE");
+
+        assertEq(oftL2.updateExchangeRateRole(updateRole), false, "role not granted");
+
+        oftL2.grantUpdateExchangeRateRole(updateRole);
+        
+        assertEq(oftL2.updateExchangeRateRole(updateRole), true, "role granted");
+
+        oftL2.revokeUpdateExchangeRateRole(updateRole);
+
+        assertEq(oftL2.updateExchangeRateRole(updateRole), false, "role revoked");
+    }
+
+    function test_AccessControl_GrantAndRevokeRoles() public {
+        address delegate = makeAddr("DELEGATE");
+        BoringVaultL2OFT oft = new BoringVaultL2OFT (
+            WETH,
+            INITIAL_EXCHANGE_RATE,
+            1e4,
+            1e4,
+            3600,
+            "Ion Boring Vault",
+            "IBV",
+            address(rollupEndpoint),
+            delegate
+        );
+
+        address updateRole = makeAddr("UPDATE_EXCHANGE_RATE_ROLE");
+
+        assertEq(oft.updateExchangeRateRole(updateRole), false, "role not granted");
+
+        vm.prank(delegate);
+        oft.grantUpdateExchangeRateRole(updateRole);
+        
+        assertEq(oft.updateExchangeRateRole(updateRole), true, "role granted");
+    }
+
+    function test_AccessControl_UpdateExchangeRate() public {
+        address updateRoleOne = makeAddr("UPDATE_EXCHANGE_RATE_ROLE_ONE");
+        address updateRoleTwo = makeAddr("UPDATE_EXCHANGE_RATE_ROLE_TWO");
+
+        oftL2.grantUpdateExchangeRateRole(updateRoleOne);
+        oftL2.grantUpdateExchangeRateRole(updateRoleTwo);
+
+        vm.prank(updateRoleOne);
+        oftL2.updateExchangeRate(1.01e18);
+
+        assertEq(oftL2.getRate(), 1.01e18, "exchange rate update one");
+
+        vm.warp(block.timestamp + 3600);
+
+        vm.prank(updateRoleTwo); 
+        oftL2.updateExchangeRate(1.02e18);
+        assertEq(oftL2.getRate(), 1.02e18, "exchange rate update two");
+    }
+
+    function test_Revert_AccessControl_UpdateExchangeRate() public {
+        vm.expectRevert(BoringVaultL2OFT.NotUpdateExchangeRateRole.selector);
+        oftL2.updateExchangeRate(1e18);
+    }
+
 }
